@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CRM para Agência</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.9/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-100 font-sans">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // Função para requisições fetch
+    const apiRequest = async (url, method, body = null) => {
+      const options = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) options.body = JSON.stringify(body);
+      const response = await fetch(url, options); // Usa a URL relativa, pois o backend serve o frontend
+      if (!response.ok) throw new Error('Erro na requisição');
+      return response.json();
+    };
+
+    // Componente principal do CRM
+    function App() {
+      const [data, setData] = React.useState({
+        clients: [],
+        projects: [],
+        tasks: [],
+        leads: [],
+        users: [],
+        notifications: []
+      });
+      const [currentView, setCurrentView] = React.useState('login');
+      const [selectedClient, setSelectedClient] = React.useState(null);
+      const [selectedProject, setSelectedProject] = React.useState(null);
+      const [currentUser, setCurrentUser] = React.useState(null);
+      const [isLoading, setIsLoading] = React.useState(true);
+
+      React.useEffect(() => {
+        const loadData = async () => {
+          try {
+            const [clients, projects, tasks, leads, users, notifications] = await Promise.all([
+              apiRequest('/api/clients', 'GET'),
+              apiRequest('/api/projects', 'GET'),
+              apiRequest('/api/tasks', 'GET'),
+              apiRequest('/api/leads', 'GET'),
+              apiRequest('/api/users', 'GET'),
+              apiRequest('/api/notifications', 'GET')
+            ]);
+            setData({ clients, projects, tasks, leads, users, notifications });
+          } catch (error) {
+            console.error('Erro ao carregar dados:', error);
+          } finally {
+            setIsLoading(false);
+          }
+        };
+        loadData();
+      }, []);
+
+      const addNotification = async (message, userId) => {
+        await apiRequest('/api/notifications', 'POST', { message, userId });
+        const notifications = await apiRequest('/api/notifications', 'GET');
+        setData(prev => ({ ...prev, notifications }));
+      };
+
+      const addClient = async (client) => {
+        const newClient = await apiRequest('/api/clients', 'POST', client);
+        setData(prev => ({ ...prev, clients: [...prev.clients, newClient] }));
+        await addNotification(`Novo cliente adicionado: ${client.name}`, currentUser.id);
+      };
+
+      const updateClient = async (id, updatedClient) => {
+        await apiRequest(`/api/clients/${id}`, 'PUT', updatedClient);
+        setData(prev => ({
+          ...prev,
+          clients: prev.clients.map(client => client.id === id ? { ...client, ...updatedClient } : client)
+        }));
+        await addNotification(`Cliente atualizado: ${updatedClient.name}`, currentUser.id);
+      };
+
+      const deleteClient = async (id) => {
+        await apiRequest(`/api/clients/${id}`, 'DELETE');
+        setData(prev => ({
+          ...prev,
+          clients: prev.clients.filter(client => client.id !== id),
+          projects: prev.projects.filter(project => project.clientId !== id),
+          tasks: prev.tasks.filter(task => !prev.projects.some(project => project.clientId === id && project.id === task.projectId))
+        }));
+        await addNotification(`Cliente excluído`, currentUser.id);
+      };
+
+      const addProject = async (project) => {
+        const newProject = await apiRequest('/api/projects', 'POST', project);
+        setData(prev => ({ ...prev, projects: [...prev.projects, newProject] }));
+        await addNotification(`Novo projeto adicionado: ${project.title}`, currentUser.id);
+      };
+
+      const updateProject = async (id, updatedProject) => {
+        await apiRequest(`/api/projects/${id}`, 'PUT', updatedProject);
+        setData(prev => ({
+          ...prev,
+          projects: prev.projects.map(project => project.id === id ? { ...project, ...updatedProject } : project)
+        }));
+        await addNotification(`Projeto atualizado: ${updatedProject.title}`, currentUser.id);
+      };
+
+      const deleteProject = async (id) => {
+        await apiRequest(`/api/projects/${id}`, 'DELETE');
+        setData(prev => ({
+          ...prev,
+          projects: prev.projects.filter(project => project.id !== id),
+          tasks: prev.tasks.filter(task => task.projectId !== id)
+        }));
+        await addNotification(`Projeto excluído`, currentUser.id);
+      };
+
+      const addTask = async (task) => {
+        const newTask = await apiRequest('/api/tasks', 'POST', {
+          ...task,
+          comments: JSON.stringify(task.comments),
+          files: JSON.stringify(task.files),
+          history: JSON.stringify(task.history)
+        });
+        setData(prev => ({ ...prev, tasks: [...prev.tasks, { ...newTask, comments: [], files: [], history: [] }] }));
+        await addNotification(`Nova tarefa adicionada: ${task.title}`, task.responsible || currentUser.id);
+      };
+
+      const updateTask = async (id, updatedTask) => {
+        await apiRequest(`/api/tasks/${id}`, 'PUT', {
+          ...updatedTask,
+          comments: JSON.stringify(updatedTask.comments),
+          files: JSON.stringify(updatedTask.files),
+          history: JSON.stringify(updatedTask.history)
+        });
+        setData(prev => ({
+          ...prev,
+          tasks: prev.tasks.map(task => task.id === id ? {
+            ...task,
+            ...updatedTask,
+            comments: [],
+            files: [],
+            history: []
+          } : task)
+        }));
+        await addNotification(`Tarefa atualizada: ${updatedTask.title} (${updatedTask.status})`, updatedTask.responsible || currentUser.id);
+      };
+
+      const deleteTask = async (id) => {
+        await apiRequest(`/api/tasks/${id}`, 'DELETE');
+        setData(prev => ({ ...prev, tasks: prev.tasks.filter(task => task.id !== id) }));
+        await addNotification(`Tarefa excluída`, currentUser.id);
+      };
+
+      const addLead = async (lead) => {
+        const newLead = await apiRequest('/api/leads', 'POST', {
+          ...lead,
+          interactions: JSON.stringify(lead.interactions)
+        });
+        setData(prev => ({ ...prev, leads: [...prev.leads, { ...newLead, interactions: [] }] }));
+        await addNotification(`Novo lead adicionado: ${lead.name}`, lead.responsible || currentUser.id);
+      };
+
+      const updateLead = async (id, updatedLead) => {
+        await apiRequest(`/api/leads/${id}`, 'PUT', {
+          ...updatedLead,
+          interactions: JSON.stringify(updatedLead.interactions)
+        });
+        setData(prev => ({
+          ...prev,
+          leads: prev.leads.map(lead => lead.id === id ? { ...lead, ...updatedLead, interactions: [] } : lead)
+        }));
+        await addNotification(`Lead atualizado: ${updatedLead.name}`, updatedLead.responsible || currentUser.id);
+      };
+
+      const deleteLead = async (id) => {
+        await apiRequest(`/api/leads/${id}`, 'DELETE');
+        setData(prev => ({ ...prev, leads: prev.leads.filter(lead => lead.id !== id) }));
+        await addNotification(`Lead excluído`, currentUser.id);
+      };
+
+      const addInteraction = async (leadId, interaction) => {
+        await apiRequest(`/api/leads/${leadId}/interactions`, 'POST', { text: interaction.text });
+        const leads = await apiRequest('/api/leads', 'GET');
+        setData(prev => ({ ...prev, leads }));
+        await addNotification(`Nova interação no lead: ${data.leads.find(l => l.id === leadId).name}`, currentUser.id);
+      };
+
+// Novo componente Register
+function Register() {
+        const [username, setUsername] = React.useState('');
+        const [password, setPassword] = React.useState('');
+        const [name, setName] = React.useState('');
+
+        const handleRegister = async (e) => {
+          e.preventDefault();
+          try {
+            const newUser = await apiRequest('/api/users/register', 'POST', { username, password, name });
+            setData(prev => ({ ...prev, users: [...prev.users, newUser] }));
+            alert('Usuário registrado com sucesso! Faça login.');
+            setCurrentView('login');
+          } catch (error) {
+            alert(error.message || 'Erro ao registrar usuário');
+          }
+        };
+
+        return (
+          <div className="container mx-auto p-4 max-w-md">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Registrar</h2>
+            <div className="bg-white p-6 rounded-lg shadow-md">
+              <input
+                type="text"
+                placeholder="Nome"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full p-2 mb-4 border rounded"
+              />
+              <input
+                type="text"
+                placeholder="Usuário"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full p-2 mb-4 border rounded"
+              />
+              <input
+                type="password"
+                placeholder="Senha"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full p-2 mb-4 border rounded"
+              />
+              <button
+                onClick={handleRegister}
+                className="bg-green-600 text-white p-2 rounded hover:bg-green-700 w-full mb-2"
+              >
+                Registrar
+              </button>
+              <button
+                onClick={() => setCurrentView('login')}
+                className="bg-gray-400 text-white p-2 rounded hover:bg-gray-500 w-full"
+              >
+                Voltar para Login
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      // Ajuste no componente Login para incluir link para registro
+      function Login() {
+        const [username, setUsername] = React.useState('');
+        const [password, setPassword] = React.useState('');
+
+        const handleLogin = (e) => {
+          e.preventDefault();
+          const user = data.users.find(u => u.username === username && u.password === password);
+          if (user) {
+            setCurrentUser(user);
+            setCurrentView('dashboard');
+          } else {
+            alert('Usuário ou senha inválidos');
+          }
+        };
+
+        return (
+          <div className="container mx-auto p-4 max-w-md">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Login</h2>
+            <div className="bg-white p-6 rounded-lg shadow-md">
+              <input
+                type="text"
+                placeholder="Usuário"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full p-2 mb-4 border rounded"
+              />
+              <input
+                type="password"
+                placeholder="Senha"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full p-2 mb-4 border rounded"
+              />
+              <button
+                onClick={handleLogin}
+                className="bg-blue-600 text-white p-2 rounded hover:bg-blue-700 w-full mb-2"
+              >
+                Entrar
+              </button>
+              <button
+                onClick={() => setCurrentView('register')}
+                className="bg-gray-400 text-white p-2 rounded hover:bg-gray-500 w-full"
+              >
+                Criar Conta
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      // Componente de Navegação
+      function NavBar() {
+        if (!currentUser) return null;
+        const unreadNotificationsCount = data.notifications && data.notifications.length > 0
+          ? data.notifications.filter(n => n.userId === currentUser.id && !n.read).length
+          : 0;
+
+        return (
+          <nav className="bg-yellow-600 text-white p-4 font-['Inter']">
+            <div className="container mx-auto flex justify-between items-center">
+              <img src="/img/logo.png" alt="Logo" className="h-16" />
+              <div className="space-x-6">
+                <button
+                  onClick={() => setCurrentView('dashboard')}
+                  className="text-lg font-medium text-white transition-colors duration-200 px-3 py-1 rounded-md hover:bg-yellow-700"
+                >
+                  Dashboard
+                </button>
+                <button
+                  onClick={() => setCurrentView('clients')}
+                  className="text-lg font-medium text-white transition-colors duration-200 px-3 py-1 rounded-md hover:bg-yellow-700"
+                >
+                  Clientes
+                </button>
+                <button
+                  onClick={() => setCurrentView('projects')}
+                  className="text-lg font-medium text-white transition-colors duration-200 px-3 py-1 rounded-md hover:bg-yellow-700"
+                >
+                  Projetos
+                </button>
+                <button
+                  onClick={() => setCurrentView('tasks')}
+                  className="text-lg font-medium text-white transition-colors duration-200 px-3 py-1 rounded-md hover:bg-yellow-700"
+                >
+                  Tarefas
+                </button>
+                <button
+                  onClick={() => setCurrentView('leads')}
+                  className="text-lg font-medium text-white transition-colors duration-200 px-3 py-1 rounded-md hover:bg-yellow-700"
+                >
+                  Leads
+                </button>
+                <button
+                  onClick={() => setCurrentView('notifications')}
+                  className="text-lg font-medium text-white transition-colors duration-200 px-3 py-1 rounded-md hover:bg-yellow-700"
+                >
+                  Notificações ({unreadNotificationsCount})
+                </button>
+                <button
+                  onClick={() => setCurrentUser(null)}
+                  className="text-lg font-medium text-white transition-colors duration-200 px-3 py-1 rounded-md hover:bg-yellow-700"
+                >
+                  Sair
+                </button>
+              </div>
+            </div>
+          </nav>
+        );
+      }
+
+      // Componente de Notificações
+      function Notifications() {
+        const [notifications, setNotifications] = React.useState(data.notifications || []);
+
+        React.useEffect(() => {
+          setNotifications(data.notifications || []);
+        }, [data.notifications]);
+
+        const markAsRead = (id) => {
+          apiRequest(`/api/notifications/${id}`, 'PUT')
+            .then(() => {
+              setNotifications(notifications.map(n => n.id === id ? { ...n, read: true } : n));
+            })
+            .catch(error => console.error('Erro ao marcar como lida:', error));
+        };
+
+        return (
+          <div className="container mx-auto p-4 font-['Inter']">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Notificações</h2>
+            <div className="bg-white p-4 rounded-lg shadow-md">
+              {notifications && notifications.length > 0 ? (
+                <ul className="space-y-2">
+                  {notifications.map(notification => (
+                    <li key={notification.id} className={`p-2 border-b ${notification.read ? 'bg-gray-100' : 'bg-blue-50'}`}>
+                      <p>{notification.message}</p>
+                      <p className="text-sm text-gray-600">{new Date(notification.timestamp).toLocaleString()}</p>
+                      {!notification.read && (
+                        <button
+                          onClick={() => markAsRead(notification.id)}
+                          className="text-blue-600 hover:underline"
+                        >
+                          Marcar como lida
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-gray-600">Nenhuma notificação no momento.</p>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      // Componente Dashboard
+      function Dashboard() {
+        const projectChartRef = React.useRef(null);
+        const taskChartRef = React.useRef(null);
+        const leadChartRef = React.useRef(null);
+
+        const calculateMetrics = () => {
+          const now = new Date();
+          const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+          const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+          const newClients = data.clients.filter(client => client.id > thirtyDaysAgo.getTime()).length;
+          const projectsDueSoon = data.projects.filter(project => {
+            const deadline = new Date(project.deadline);
+            return deadline <= sevenDaysFromNow && project.status !== 'Concluído';
+          }).length;
+          const completedTasksPercent = data.tasks.length
+            ? ((data.tasks.filter(t => t.status === 'Concluída').length / data.tasks.length) * 100).toFixed(1)
+            : 0;
+          const urgentTasks = data.tasks.filter(task => {
+            const dueDate = new Date(task.dueDate);
+            return dueDate <= threeDaysFromNow && task.status !== 'Concluída';
+          });
+          const conversionRate = data.leads.length
+            ? ((data.leads.filter(l => l.status === 'Fechado').length / data.leads.length) * 100).toFixed(1)
+            : 0;
+
+          return { newClients, projectsDueSoon, completedTasksPercent, urgentTasks, conversionRate };
+        };
+
+        const { newClients, projectsDueSoon, completedTasksPercent, urgentTasks, conversionRate } = calculateMetrics();
+
+        const projectStatusCounts = {
+          'Pendente': data.projects.filter(p => p.status === 'Pendente').length,
+          'Em andamento': data.projects.filter(p => p.status === 'Em andamento').length,
+          'Concluído': data.projects.filter(p => p.status === 'Concluído').length
+        };
+
+        const taskStatusCounts = {
+          'Pendente': data.tasks.filter(t => t.status === 'Pendente').length,
+          'Em Produção': data.tasks.filter(t => t.status === 'Em Produção').length,
+          'Em Revisão': data.tasks.filter(t => t.status === 'Em Revisão').length,
+          'Em Aprovação': data.tasks.filter(t => t.status === 'Em Aprovação').length,
+          'Concluída': data.tasks.filter(t => t.status === 'Concluída').length
+        };
+
+        const leadStatusCounts = {
+          'Novo Lead': data.leads.filter(l => l.status === 'Novo Lead').length,
+          'Contato Realizado': data.leads.filter(l => l.status === 'Contato Realizado').length,
+          'Proposta Enviada': data.leads.filter(l => l.status === 'Proposta Enviada').length,
+          'Fechado': data.leads.filter(l => l.status === 'Fechado').length
+        };
+
+        React.useEffect(() => {
+          let projectChartInstance, taskChartInstance, leadChartInstance;
+
+          if (projectChartRef.current) {
+            projectChartInstance = new Chart(projectChartRef.current, {
+              type: 'bar',
+              data: {
+                labels: ['Pendente', 'Em andamento', 'Concluído'],
+                datasets: [{
+                  label: 'Projetos por Status',
+                  data: [projectStatusCounts['Pendente'], projectStatusCounts['Em andamento'], projectStatusCounts['Concluído']],
+                  backgroundColor: ['#facc15', '#3b82f6', '#22c55e'],
+                  borderColor: ['#ca8a04', '#1e40af', '#15803d'],
+                  borderWidth: 1
+                }]
+              },
+              options: {
+                responsive: true,
+                plugins: {
+                  legend: { position: 'top' },
+                  title: { display: true, text: 'Distribuição de Projetos por Status' }
+                },
+                scales: {
+                  y: { beginAtZero: true, title: { display: true, text: 'Quantidade' } }
+                }
+              }
+            });
+          }
+
+          if (taskChartRef.current) {
+            taskChartInstance = new Chart(taskChartRef.current, {
+              type: 'pie',
+              data: {
+                labels: ['Pendente', 'Em Produção', 'Em Revisão', 'Em Aprovação', 'Concluída'],
+                datasets: [{
+                  label: 'Tarefas por Status',
+                  data: [
+                    taskStatusCounts['Pendente'],
+                    taskStatusCounts['Em Produção'],
+                    taskStatusCounts['Em Revisão'],
+                    taskStatusCounts['Em Aprovação'],
+                    taskStatusCounts['Concluída']
+                  ],
+                  backgroundColor: ['#facc15', '#3b82f6', '#ef4444', '#8b5cf6', '#22c55e'],
+                  borderColor: ['#ca8a04', '#1e40af', '#b91c1c', '#6d28d9', '#15803d'],
+                  borderWidth: 1
+                }]
+              },
+              options: {
+                responsive: true,
+                plugins: {
+                  legend: { position: 'top' },
+                  title: { display: true, text: 'Distribuição de Tarefas por Status' }
+                }
+              }
+            });
+          }
+
+          if (leadChartRef.current) {
+            leadChartInstance = new Chart(leadChartRef.current, {
+              type: 'bar',
+              data: {
+                labels: ['Novo Lead', 'Contato Realizado', 'Proposta Enviada', 'Fechado'],
+                datasets: [{
+                  label: 'Leads por Status',
+                  data: [
+                    leadStatusCounts['Novo Lead'],
+                    leadStatusCounts['Contato Realizado'],
+                    leadStatusCounts['Proposta Enviada'],
+                    leadStatusCounts['Fechado']
+                  ],
+                  backgroundColor: ['#facc15', '#3b82f6', '#ef4444', '#22c55e'],
+                  borderColor: ['#ca8a04', '#1e40af', '#b91c1c', '#15803d'],
+                  borderWidth: 1
+                }]
+              },
+              options: {
+                responsive: true,
+                plugins: {
+                  legend: { position: 'top' },
+                  title: { display: true, text: 'Distribuição de Leads por Status' }
+                },
+                scales: {
+                  y: { beginAtZero: true, title: { display: true, text: 'Quantidade' } }
+                }
+              }
+            });
+          }
+
+          return () => {
+            if (projectChartInstance) projectChartInstance.destroy();
+            if (taskChartInstance) taskChartInstance.destroy();
+            if (leadChartInstance) leadChartInstance.destroy();
+          };
+        }, [data]);
+
+        return (
+          <div className="container mx-auto p-4 font-['Inter']">
+            <h2 className="text-2xl font-bold mb-6 text-gray-800">Dashboard</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              <div className="bg-white p-4 rounded-lg shadow-md">
+                <h3 className="text-lg font-semibold text-gray-700">Total de Clientes</h3>
+                <p className="text-2xl font-bold text-gray-900">{data.clients.length}</p>
+              </div>
+              <div className="bg-white p-4 rounded-lg shadow-md">
+                <h3 className="text-lg font-semibold text-gray-700">Projetos Ativos</h3>
+                <p className="text-2xl font-bold text-gray-900">{data.projects.filter(p => p.status === 'Em andamento').length}</p>
+              </div>
+              <div className="bg-white p-4 rounded-lg shadow-md">
+                <h3 className="text-lg font-semibold text-gray-700">Tarefas Pendentes</h3>
+                <p className="text-2xl font-bold text-gray-900">{data.tasks.filter(t => t.status === 'Pendente').length}</p>
+              </div>
+              <div className="bg-white p-4 rounded-lg shadow-md">
+                <h3 className="text-lg font-semibold text-gray-700">Novos Clientes (30 dias)</h3>
+                <p className="text-2xl font-bold text-gray-900">{newClients}</p>
+              </div>
+              <div className="bg-white p-4 rounded-lg shadow-md">
+                <h3 className="text-lg font-semibold text-gray-700">Projetos com Prazo Próximo</h3>
+                <p className="text-2xl font-bold text-gray-900">{projectsDueSoon}</p>
+              </div>
+              <div className="bg-white p-4 rounded-lg shadow-md">
+                <h3 className="text-lg font-semibold text-gray-700">Tarefas Concluídas</h3>
+                <p className="text-2xl font-bold text-gray-900">{completedTasksPercent}%</p>
+              </div>
+              <div className="bg-white p-4 rounded-lg shadow-md">
+                <h3 className="text-lg font-semibold text-gray-700">Taxa de Conversão de Leads</h3>
+                <p className="text-2xl font-bold text-gray-900">{conversionRate}%</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+              <div className="bg-white p-4 rounded-lg shadow-md">
+                <canvas ref={projectChartRef}></canvas>
+              </div>
+              <div className="bg-white p-4 rounded-lg shadow-md">
+                <canvas ref={taskChartRef}></canvas>
+              </div>
+              <div className="bg-white p-4 rounded-lg shadow-md">
+                <canvas ref={leadChartRef}></canvas>
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-md">
+              <h3 className="text-lg font-semibold mb-4 text-gray-700">Tarefas Urgentes (Prazo em até 3 dias)</h3>
+              {urgentTasks.length > 0 ? (
+                <ul className="space-y-2">
+                  {urgentTasks.map(task => (
+                    <li key={task.id} className="flex justify-between items-center p-2 border-b border-gray-200">
+                      <div>
+                        <p className="font-medium text-gray-800">{task.title}</p>
+                        <p className="text-sm text-gray-600">
+                          Projeto: {data.projects.find(p => p.id === task.projectId)?.title || 'N/A'} | 
+                          Área: {task.area} | 
+                          Prazo: {task.dueDate}
+                        </p>
+                      </div>
+                      <span className={`text-sm font-medium px-2 py-1 rounded ${
+                        task.status === 'Pendente' ? 'bg-yellow-100 text-yellow-800' :
+                        task.status === 'Em Produção' ? 'bg-blue-100 text-blue-800' :
+                        task.status === 'Em Revisão' ? 'bg-red-100 text-red-800' :
+                        task.status === 'Em Aprovação' ? 'bg-purple-100 text-purple-800' :
+                        'bg-green-100 text-green-800'
+                      }`}>
+                        {task.status}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-gray-600">Nenhuma tarefa urgente no momento.</p>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      // Componente de Clientes
+      function Clients() {
+        const [newClient, setNewClient] = React.useState({ name: '', email: '', phone: '' });
+        const [editingClient, setEditingClient] = React.useState(null);
+
+        const handleSubmit = async (e) => {
+          e.preventDefault();
+          if (editingClient) {
+            await updateClient(editingClient.id, newClient);
+            setEditingClient(null);
+          } else {
+            await addClient(newClient);
+          }
+          setNewClient({ name: '', email: '', phone: '' });
+        };
+
+        return (
+          <div className="container mx-auto p-4">
+            <h2 className="text-2xl font-bold mb-4">Gerenciar Clientes</h2>
+            <div className="mb-4 bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold mb-2">{editingClient ? 'Editar Cliente' : 'Adicionar Cliente'}</h3>
+              <div>
+                <input
+                  type="text"
+                  placeholder="Nome"
+                  value={newClient.name}
+                  onChange={(e) => setNewClient({ ...newClient, name: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <input
+                  type="email"
+                  placeholder="Email"
+                  value={newClient.email}
+                  onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <input
+                  type="text"
+                  placeholder="Telefone"
+                  value={newClient.phone}
+                  onChange={(e) => setNewClient({ ...newClient, phone: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <button
+                  onClick={handleSubmit}
+                  className="bg-blue-600 text-white p-2 rounded hover:bg-blue-700"
+                >
+                  {editingClient ? 'Atualizar' : 'Adicionar'}
+                </button>
+                {editingClient && (
+                  <button
+                    onClick={() => setEditingClient(null)}
+                    className="ml-2 bg-gray-400 text-white p-2 rounded hover:bg-gray-500"
+                  >
+                    Cancelar
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold mb-2">Lista de Clientes</h3>
+              <ul>
+                {data.clients.map(client => (
+                  <li key={client.id} className="flex justify-between items-center p-2 border-b">
+                    <div>
+                      <p><strong>{client.name}</strong></p>
+                      <p>{client.email} | {client.phone}</p>
+                    </div>
+                    <div>
+                      <button
+                        onClick={() => { setSelectedClient(client.id); setCurrentView('projects'); }}
+                        className="text-blue-600 hover:underline mr-2"
+                      >
+                        Ver Projetos
+                      </button>
+                      <button
+                        onClick={() => { setEditingClient(client); setNewClient(client); }}
+                        className="text-yellow-600 hover:underline mr-2"
+                      >
+                        Editar
+                      </button>
+                      <button
+                        onClick={() => deleteClient(client.id)}
+                        className="text-red-600 hover:underline"
+                      >
+                        Excluir
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        );
+      }
+
+      // Componente de Projetos
+      function Projects() {
+        const [newProject, setNewProject] = React.useState({ title: '', clientId: selectedClient || '', status: 'Em andamento', deadline: '' });
+        const [editingProject, setEditingProject] = React.useState(null);
+
+        const handleSubmit = (e) => {
+          e.preventDefault();
+          if (editingProject) {
+            updateProject(editingProject.id, newProject);
+            setEditingProject(null);
+          } else {
+            addProject(newProject);
+          }
+          setNewProject({ title: '', clientId: selectedClient || '', status: 'Em andamento', deadline: '' });
+        };
+
+        const filteredProjects = selectedClient
+          ? data.projects.filter(project => project.clientId === selectedClient)
+          : data.projects;
+
+        return (
+          <div className="container mx-auto p-4">
+            <h2 className="text-2xl font-bold mb-4">Gerenciar Projetos</h2>
+            {selectedClient && (
+              <button
+                onClick={() => setSelectedClient(null)}
+                className="mb-4 text-blue-600 hover:underline"
+              >
+                Voltar para Todos os Projetos
+              </button>
+            )}
+            <div className="mb-4 bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold mb-2">{editingProject ? 'Editar Projeto' : 'Adicionar Projeto'}</h3>
+              <div>
+                <input
+                  type="text"
+                  placeholder="Título do Projeto"
+                  value={newProject.title}
+                  onChange={(e) => setNewProject({ ...newProject, title: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                {!selectedClient && (
+                  <select
+                    value={newProject.clientId}
+                    onChange={(e) => setNewProject({ ...newProject, clientId: e.target.value })}
+                    className="w-full p-2 mb-2 border rounded"
+                  >
+                    <option value="">Selecione um Cliente</option>
+                    {data.clients.map(client => (
+                      <option key={client.id} value={client.id}>{client.name}</option>
+                    ))}
+                  </select>
+                )}
+                <select
+                  value={newProject.status}
+                  onChange={(e) => setNewProject({ ...newProject, status: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                >
+                  <option value="Em andamento">Em andamento</option>
+                  <option value="Concluído">Concluído</option>
+                  <option value="Pendente">Pendente</option>
+                </select>
+                <input
+                  type="date"
+                  value={newProject.deadline}
+                  onChange={(e) => setNewProject({ ...newProject, deadline: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <button
+                  onClick={handleSubmit}
+                  className="bg-blue-600 text-white p-2 rounded hover:bg-blue-700"
+                >
+                  {editingProject ? 'Atualizar' : 'Adicionar'}
+                </button>
+                {editingProject && (
+                  <button
+                    onClick={() => setEditingProject(null)}
+                    className="ml-2 bg-gray-400 text-white p-2 rounded hover:bg-gray-500"
+                  >
+                    Cancelar
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold mb-2">Lista de Projetos</h3>
+              <ul>
+                {filteredProjects.map(project => (
+                  <li key={project.id} className="flex justify-between items-center p-2 border-b">
+                    <div>
+                      <p><strong>{project.title}</strong></p>
+                      <p>Cliente: {data.clients.find(c => c.id === project.clientId)?.name || 'N/A'}</p>
+                      <p>Status: {project.status} | Prazo: {project.deadline}</p>
+                    </div>
+                    <div>
+                      <button
+                        onClick={() => { setSelectedProject(project.id); setCurrentView('tasks'); }}
+                        className="text-blue-600 hover:underline mr-2"
+                      >
+                        Ver Tarefas
+                      </button>
+                      <button
+                        onClick={() => { setEditingProject(project); setNewProject(project); }}
+                        className="text-yellow-600 hover:underline mr-2"
+                      >
+                        Editar
+                      </button>
+                      <button
+                        onClick={() => deleteProject(project.id)}
+                        className="text-red-600 hover:underline"
+                      >
+                        Excluir
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        );
+      }
+
+      // Componente de Tarefas
+      function Tasks() {
+        const [newTask, setNewTask] = React.useState({ 
+          title: '', 
+          projectId: selectedProject || '', 
+          status: 'Pendente', 
+          dueDate: '', 
+          area: 'Design', 
+          responsible: data.users[0]?.id || '', 
+          comments: [], 
+          files: []
+        });
+        const [editingTask, setEditingTask] = React.useState(null);
+        const [filters, setFilters] = React.useState({ area: '', status: '', responsible: '' });
+        const [comment, setComment] = React.useState('');
+
+        const areas = ['Design', 'Copy', 'Tráfego', 'Edição'];
+        const statuses = ['Pendente', 'Em Produção', 'Em Revisão', 'Em Aprovação', 'Concluída'];
+
+        const handleSubmit = (e) => {
+          e.preventDefault();
+          if (editingTask) {
+            updateTask(editingTask.id, newTask);
+            setEditingTask(null);
+          } else {
+            addTask(newTask);
+          }
+          setNewTask({ title: '', projectId: selectedProject || '', status: 'Pendente', dueDate: '', area: 'Design', responsible: data.users[0]?.id || '', comments: [], files: [] });
+        };
+
+        const handleFileUpload = (e, taskId) => {
+          const file = e.target.files[0];
+          if (file) {
+            const fileData = { id: Date.now(), name: file.name, timestamp: new Date().toISOString(), user: currentUser.name };
+            if (taskId) {
+              const task = data.tasks.find(t => t.id === taskId);
+              updateTask(taskId, { ...task, files: [...task.files, fileData] });
+            } else {
+              setNewTask({ ...newTask, files: [...newTask.files, fileData] });
+            }
+          }
+        };
+
+        const addComment = (taskId) => {
+          if (comment.trim()) {
+            const newComment = { id: Date.now(), text: comment, user: currentUser.name, timestamp: new Date().toISOString() };
+            const task = data.tasks.find(t => t.id === taskId);
+            updateTask(taskId, { ...task, comments: [...task.comments, newComment] });
+            setComment('');
+          }
+        };
+
+        const filteredTasks = selectedProject
+          ? data.tasks.filter(task => task.projectId === selectedProject)
+          : data.tasks.filter(task => 
+              (!filters.area || task.area === filters.area) &&
+              (!filters.status || task.status === filters.status) &&
+              (!filters.responsible || task.responsible === filters.responsible)
+            );
+
+        return (
+          <div className="container mx-auto p-4">
+            <h2 className="text-2xl font-bold mb-4">Gerenciar Tarefas</h2>
+            {selectedProject && (
+              <button
+                onClick={() => setSelectedProject(null)}
+                className="mb-4 text-blue-600 hover:underline"
+              >
+                Voltar para Todas as Tarefas
+              </button>
+            )}
+            <div className="mb-4 bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold mb-2">{editingTask ? 'Editar Tarefa' : 'Adicionar Tarefa'}</h3>
+              <div>
+                <input
+                  type="text"
+                  placeholder="Título da Tarefa"
+                  value={newTask.title}
+                  onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                {!selectedProject && (
+                  <select
+                    value={newTask.projectId}
+                    onChange={(e) => setNewTask({ ...newTask, projectId: e.target.value })}
+                    className="w-full p-2 mb-2 border rounded"
+                  >
+                    <option value="">Selecione um Projeto</option>
+                    {data.projects.map(project => (
+                      <option key={project.id} value={project.id}>{project.title}</option>
+                    ))}
+                  </select>
+                )}
+                <select
+                  value={newTask.area}
+                  onChange={(e) => setNewTask({ ...newTask, area: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                >
+                  {areas.map(area => (
+                    <option key={area} value={area}>{area}</option>
+                  ))}
+                </select>
+                <select
+                  value={newTask.responsible}
+                  onChange={(e) => setNewTask({ ...newTask, responsible: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                >
+                  <option value="">Selecione um Responsável</option>
+                  {data.users.map(user => (
+                    <option key={user.id} value={user.id}>{user.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={newTask.status}
+                  onChange={(e) => setNewTask({ ...newTask, status: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                >
+                  {statuses.map(status => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+                </select>
+                <input
+                  type="date"
+                  value={newTask.dueDate}
+                  onChange={(e) => setNewTask({ ...newTask, dueDate: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <input
+                  type="file"
+                  onChange={(e) => handleFileUpload(e)}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <button
+                  onClick={handleSubmit}
+                  className="bg-blue-600 text-white p-2 rounded hover:bg-blue-700"
+                >
+                  {editingTask ? 'Atualizar' : 'Adicionar'}
+                </button>
+                {editingTask && (
+                  <button
+                    onClick={() => setEditingTask(null)}
+                    className="ml-2 bg-gray-400 text-white p-2 rounded hover:bg-gray-500"
+                  >
+                    Cancelar
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="mb-4 bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold mb-2">Filtros</h3>
+              <div className="flex space-x-4">
+                <select
+                  value={filters.area}
+                  onChange={(e) => setFilters({ ...filters, area: e.target.value })}
+                  className="p-2 border rounded"
+                >
+                  <option value="">Todas as Áreas</option>
+                  {areas.map(area => (
+                    <option key={area} value={area}>{area}</option>
+                  ))}
+                </select>
+                <select
+                  value={filters.status}
+                  onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                  className="p-2 border rounded"
+                >
+                  <option value="">Todos os Status</option>
+                  {statuses.map(status => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+                </select>
+                <select
+                  value={filters.responsible}
+                  onChange={(e) => setFilters({ ...filters, responsible: e.target.value })}
+                  className="p-2 border rounded"
+                >
+                  <option value="">Todos os Responsáveis</option>
+                  {data.users.map(user => (
+                    <option key={user.id} value={user.id}>{user.name}</option>
+                  ))}
+                </select>
+              </div>
+
+
+            </div>
+            <div className="bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold mb-2">Lista de Tarefas</h3>
+              <ul>
+                {filteredTasks.map(task => (
+                  <li key={task.id} className="p-2 border-b">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p><strong>{task.title}</strong></p>
+                        <p>Projeto: {data.projects.find(p => p.id === task.projectId)?.title || 'N/A'}</p>
+                        <p>Área: {task.area} | Status: {task.status} | Prazo: {task.dueDate}</p>
+                        <p>Responsável: {data.users.find(u => u.id === task.responsible)?.name || 'N/A'}</p>
+                      </div>
+                      <div>
+                        <button
+                          onClick={() => { setEditingTask(task); setNewTask(task); }}
+                          className="text-yellow-600 hover:underline mr-2"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => deleteTask(task.id)}
+                          className="text-red-600 hover:underline"
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <h4 className="text-sm font-semibold">Arquivos:</h4>
+                      {task.files.length > 0 ? (
+                        <ul className="text-sm">
+                          {task.files.map(file => (
+                            <li key={file.id}>{file.name} (por {file.user} em {new Date(file.timestamp).toLocaleString()})</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-gray-600">Nenhum arquivo.</p>
+                      )}
+                      <h4 className="text-sm font-semibold mt-2">Comentários:</h4>
+                      {task.comments.length > 0 ? (
+                        <ul className="text-sm">
+                          {task.comments.map(comment => (
+                            <li key={comment.id}>{comment.text} (por {comment.user} em {new Date(comment.timestamp).toLocaleString()})</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-gray-600">Nenhum comentário.</p>
+                      )}
+                      <div className="mt-2">
+                        <input
+                          type="text"
+                          placeholder="Adicionar comentário"
+                          value={comment}
+                          onChange={(e) => setComment(e.target.value)}
+                          className="w-full p-2 mb-2 border rounded"
+                        />
+                        <button
+                          onClick={() => addComment(task.id)}
+                          className="bg-blue-600 text-white p-2 rounded hover:bg-blue-700"
+                        >
+                          Adicionar Comentário
+                        </button>
+                        <input
+                          type="file"
+                          onChange={(e) => handleFileUpload(e, task.id)}
+                          className="w-full p-2 mb-2 border rounded"
+                        />
+                      </div>
+                      <h4 className="text-sm font-semibold mt-2">Histórico:</h4>
+                      <ul className="text-sm">
+                        {task.history.map((entry, index) => (
+                          <li key={index}>{entry.status} (por {entry.user} em {new Date(entry.timestamp).toLocaleString()})</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        );
+      }
+
+      // Componente de Leads
+      function Leads() {
+        const [newLead, setNewLead] = React.useState({ 
+          name: '', 
+          email: '', 
+          phone: '', 
+          classification: 'Frio', 
+          status: 'Novo Lead', 
+          responsible: data.users[0]?.id || '', 
+          source: '', 
+          estimatedValue: 0,
+          reminder: ''
+        });
+        const [editingLead, setEditingLead] = React.useState(null);
+        const [newInteraction, setNewInteraction] = React.useState('');
+
+        const classifications = ['Frio', 'Morno', 'Quente'];
+        const statuses = ['Novo Lead', 'Contato Realizado', 'Proposta Enviada', 'Fechado'];
+
+        const handleSubmit = (e) => {
+          e.preventDefault();
+          if (editingLead) {
+            updateLead(editingLead.id, newLead);
+            setEditingLead(null);
+          } else {
+            addLead(newLead);
+          }
+          setNewLead({ name: '', email: '', phone: '', classification: 'Frio', status: 'Novo Lead', responsible: data.users[0]?.id || '', source: '', estimatedValue: 0, reminder: '' });
+        };
+
+        const handleAddInteraction = (leadId) => {
+          if (newInteraction.trim()) {
+            addInteraction(leadId, { text: newInteraction });
+            setNewInteraction('');
+          }
+        };
+
+        const calculateReports = () => {
+          const leadsBySource = data.leads.reduce((acc, lead) => {
+            acc[lead.source] = (acc[lead.source] || 0) + 1;
+            return acc;
+          }, {});
+          const estimatedRevenue = data.leads.reduce((acc, lead) => acc + (lead.estimatedValue || 0), 0);
+          return { leadsBySource, estimatedRevenue };
+        };
+
+        const { leadsBySource, estimatedRevenue } = calculateReports();
+
+        return (
+          <div className="container mx-auto p-4">
+            <h2 className="text-2xl font-bold mb-4">Gerenciar Leads</h2>
+            <div className="mb-4 bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold mb-2">{editingLead ? 'Editar Lead' : 'Adicionar Lead'}</h3>
+              <div>
+                <input
+                  type="text"
+                  placeholder="Nome"
+                  value={newLead.name}
+                  onChange={(e) => setNewLead({ ...newLead, name: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <input
+                  type="email"
+                  placeholder="Email"
+                  value={newLead.email}
+                  onChange={(e) => setNewLead({ ...newLead, email: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <input
+                  type="text"
+                  placeholder="Telefone"
+                  value={newLead.phone}
+                  onChange={(e) => setNewLead({ ...newLead, phone: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <select
+                  value={newLead.classification}
+                  onChange={(e) => setNewLead({ ...newLead, classification: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                >
+                  {classifications.map(classification => (
+                    <option key={classification} value={classification}>{classification}</option>
+                  ))}
+                </select>
+                <select
+                  value={newLead.status}
+                  onChange={(e) => setNewLead({ ...newLead, status: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                >
+                  {statuses.map(status => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+                </select>
+                <select
+                  value={newLead.responsible}
+                  onChange={(e) => setNewLead({ ...newLead, responsible: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                >
+                  <option value="">Selecione um Responsável</option>
+                  {data.users.map(user => (
+                    <option key={user.id} value={user.id}>{user.name}</option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  placeholder="Origem do Lead"
+                  value={newLead.source}
+                  onChange={(e) => setNewLead({ ...newLead, source: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <input
+                  type="number"
+                  placeholder="Faturamento Estimado"
+                  value={newLead.estimatedValue}
+                  onChange={(e) => setNewLead({ ...newLead, estimatedValue: parseFloat(e.target.value) || 0 })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <input
+                  type="datetime-local"
+                  placeholder="Lembrete"
+                  value={newLead.reminder}
+                  onChange={(e) => setNewLead({ ...newLead, reminder: e.target.value })}
+                  className="w-full p-2 mb-2 border rounded"
+                />
+                <button
+                  onClick={handleSubmit}
+                  className="bg-blue-600 text-white p-2 rounded hover:bg-blue-700"
+                >
+                  {editingLead ? 'Atualizar' : 'Adicionar'}
+                </button>
+                {editingLead && (
+                  <button
+                    onClick={() => setEditingLead(null)}
+                    className="ml-2 bg-gray-400 text-white p-2 rounded hover:bg-gray-500"
+                  >
+                    Cancelar
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded shadow mb-4">
+              <h3 className="text-lg font-semibold mb-2">Relatórios</h3>
+              <p>Leads por Origem: {Object.entries(leadsBySource).map(([source, count]) => `${source}: ${count}`).join(', ')}</p>
+              <p>Faturamento Estimado Total: R${estimatedRevenue.toFixed(2)}</p>
+            </div>
+            <div className="bg-white p-4 rounded shadow">
+              <h3 className="text-lg font-semibold mb-2">Lista de Leads</h3>
+              <ul>
+                {data.leads.map(lead => (
+                  <li key={lead.id} className="p-2 border-b">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p><strong>{lead.name}</strong></p>
+                        <p>{lead.email} | {lead.phone}</p>
+                        <p>Classificação: {lead.classification} | Status: {lead.status}</p>
+                        <p>Responsável: {data.users.find(u => u.id === lead.responsible)?.name || 'N/A'}</p>
+                        <p>Origem: {lead.source} | Faturamento Estimado: R${lead.estimatedValue.toFixed(2)}</p>
+                        {lead.reminder && <p>Lembrete: {new Date(lead.reminder).toLocaleString()}</p>}
+                      </div>
+                      <div>
+                        <button
+                          onClick={() => { setEditingLead(lead); setNewLead(lead); }}
+                          className="text-yellow-600 hover:underline mr-2"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => deleteLead(lead.id)}
+                          className="text-red-600 hover:underline"
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <h4 className="text-sm font-semibold">Interações:</h4>
+                      {lead.interactions.length > 0 ? (
+                        <ul className="text-sm">
+                          {lead.interactions.map(interaction => (
+                            <li key={interaction.id}>{interaction.text} (por {interaction.user} em {new Date(interaction.timestamp).toLocaleString()})</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-gray-600">Nenhuma interação.</p>
+                      )}
+                      <div className="mt-2">
+                        <input
+                          type="text"
+                          placeholder="Adicionar interação"
+                          value={newInteraction}
+                          onChange={(e) => setNewInteraction(e.target.value)}
+                          className="w-full p-2 mb-2 border rounded"
+                        />
+                        <button
+                          onClick={() => handleAddInteraction(lead.id)}
+                          className="bg-blue-600 text-white p-2 rounded hover:bg-blue-700"
+                        >
+                          Adicionar Interação
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        );
+      }
+
+      // Renderizar visualização atual com verificação de carregamento
+  if (isLoading) {
+    return <div className="container mx-auto p-4 text-center">Carregando...</div>;
+  }
+
+      // Renderizar visualização atual
+      return (
+        <div>
+          {currentUser && <NavBar />}
+          {currentView === 'login' && <Login />}
+          {currentView === 'register' && <Register />}
+          {currentUser && currentView === 'dashboard' && <Dashboard />}
+          {currentUser && currentView === 'clients' && <Clients />}
+          {currentUser && currentView === 'projects' && <Projects />}
+          {currentUser && currentView === 'tasks' && <Tasks />}
+          {currentUser && currentView === 'leads' && <Leads />}
+          {currentUser && currentView === 'notifications' && <Notifications />}
+        </div>
+      );
+    }
+
+    // Renderizar o aplicativo
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
